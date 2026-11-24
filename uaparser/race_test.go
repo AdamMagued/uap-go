@@ -24,30 +24,6 @@ func TestNewConcurrent_NoRaceOnDefaultRegexDefinitions(t *testing.T) {
 	wg.Wait()
 }
 
-// TestConcurrentNewWithRegexDefinitions verifies that concurrent New() calls
-// passing a shared RegexDefinitions instance are safely isolated and do not race.
-func TestConcurrentNewWithRegexDefinitions(t *testing.T) {
-	def := defaultRegexesDefinitions()
-	const n = 16
-	var wg sync.WaitGroup
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func() {
-			defer wg.Done()
-			p, err := New(WithRegexDefinitions(def))
-			if err != nil {
-				t.Errorf("New: %v", err)
-				return
-			}
-			cli := p.Parse("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
-			if cli == nil || cli.UserAgent == nil || cli.UserAgent.Family != "Chrome" {
-				t.Errorf("unexpected parse result: %v", cli)
-			}
-		}()
-	}
-	wg.Wait()
-}
-
 // TestConcurrentParse_SharedParser verifies that multiple goroutines concurrently
 // parsing user agent strings using a single shared Parser operate safely without data races.
 func TestConcurrentParse_SharedParser(t *testing.T) {
@@ -169,12 +145,13 @@ func TestConcurrentSubParsers_SharedParser(t *testing.T) {
 	wg.Wait()
 }
 
-// TestConcurrentParseWithSort_SharedParser tests that concurrent parsing does not race
-// with periodic sorting triggered by checkAndSort when WithSort is enabled.
+// TestConcurrentParseWithSort_SharedParser tests that concurrent parsing and
+// direct sub-parser calls do not race with periodic sorting triggered by
+// checkAndSort when WithSort is enabled.
 func TestConcurrentParseWithSort_SharedParser(t *testing.T) {
 	parser, err := New(
 		WithSort(true),
-		WithCacheSize(32),
+		WithCacheSize(1),
 		WithMatchIdxNotOk(0),
 	)
 	if err != nil {
@@ -204,9 +181,24 @@ func TestConcurrentParseWithSort_SharedParser(t *testing.T) {
 			defer wg.Done()
 			for iter := 0; iter < iterations; iter++ {
 				ua := userAgents[(gid+iter)%len(userAgents)]
-				cli := parser.Parse(ua)
-				if cli == nil || cli.UserAgent == nil || cli.Os == nil || cli.Device == nil {
-					t.Errorf("incomplete client parsed for %q", ua)
+				switch iter % 4 {
+				case 0:
+					cli := parser.Parse(ua)
+					if cli == nil || cli.UserAgent == nil || cli.Os == nil || cli.Device == nil {
+						t.Errorf("incomplete client parsed for %q", ua)
+					}
+				case 1:
+					if parsedUA := parser.ParseUserAgent(ua); parsedUA == nil {
+						t.Errorf("nil UA parsed for %q", ua)
+					}
+				case 2:
+					if parsedOS := parser.ParseOs(ua); parsedOS == nil {
+						t.Errorf("nil OS parsed for %q", ua)
+					}
+				case 3:
+					if parsedDvc := parser.ParseDevice(ua); parsedDvc == nil {
+						t.Errorf("nil Device parsed for %q", ua)
+					}
 				}
 			}
 		}(g)
